@@ -71,9 +71,12 @@ def resolve_google_sa_json() -> str:
 
 
 def env(key: str, default: Optional[str] = None) -> str:
-    val = os.getenv(key, default)
-    if val is None:
+    raw = os.getenv(key, default)
+    if raw is None:
         raise RuntimeError(f"Missing required environment variable: {key}")
+    val = raw.strip().strip('"').strip("'")
+    if not val:
+        raise RuntimeError(f"Environment variable empty: {key}")
     return val
 
 def build_pg_url(
