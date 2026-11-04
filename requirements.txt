@@ -1,3 +1,6 @@
-pandas 
-gspread 
+pandas
+gspread
 google-auth
+sqlalchemy
+psycopg2-binary
+python-dotenv

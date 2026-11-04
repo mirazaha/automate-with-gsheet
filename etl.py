@@ -9,19 +9,28 @@ Simple ETL: Google Sheets -> PostgreSQL
 Environment variables:
   SHEET_ID
   WORKSHEET
-  GOOGLE_SA_KEY_JSON   # full JSON content stored as a GitHub Secret
+  GOOGLE_SA_KEY_JSON   # full JSON (GitHub Secret) OR use GOOGLE_SA_KEY_PATH locally
+  GOOGLE_SA_KEY_PATH   # path to service account .json (local .env)
   PG_USER
   PG_PASSWORD
   PG_HOST
   PG_PORT
   PG_DB
   PG_TABLE -> Provide whatever name you want
+  PG_SSLMODE  # optional, e.g. require (Supabase)
 """
 
 import os
 import json
 import logging
+from pathlib import Path
 from typing import Optional
+from urllib.parse import quote_plus
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None  # type: ignore[misc, assignment]
 
 import pandas as pd
 import gspread
@@ -37,14 +46,51 @@ logging.basicConfig(
 logger = logging.getLogger("etl")
 
 # ─── Config helpers ───────────────────────────────────────────────────────────
+def load_local_env() -> None:
+    """Charge `.env` à côté de etl.py (dev local uniquement)."""
+    if load_dotenv is None:
+        return
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+
+
+def resolve_google_sa_json() -> str:
+    inline = os.getenv("GOOGLE_SA_KEY_JSON", "").strip()
+    if inline:
+        return inline
+    key_path = os.getenv("GOOGLE_SA_KEY_PATH", "").strip()
+    if key_path:
+        path = Path(key_path).expanduser()
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent / path
+        if not path.is_file():
+            raise RuntimeError(f"GOOGLE_SA_KEY_PATH introuvable: {path}")
+        return path.read_text(encoding="utf-8")
+    raise RuntimeError(
+        "Définir GOOGLE_SA_KEY_JSON ou GOOGLE_SA_KEY_PATH (fichier JSON GCP)"
+    )
+
+
 def env(key: str, default: Optional[str] = None) -> str:
     val = os.getenv(key, default)
     if val is None:
         raise RuntimeError(f"Missing required environment variable: {key}")
     return val
 
-def build_pg_url(user: str, password: str, host: str, port: str, db: str) -> str:
-    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+def build_pg_url(
+    user: str,
+    password: str,
+    host: str,
+    port: str,
+    db: str,
+    sslmode: Optional[str] = None,
+) -> str:
+    url = (
+        f"postgresql://{quote_plus(user)}:{quote_plus(password)}"
+        f"@{host}:{port}/{quote_plus(db, safe='')}"
+    )
+    if sslmode:
+        url += f"?sslmode={sslmode}"
+    return url
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
 def read_worksheet(sheet_id: str, worksheet: str, sa_json: str) -> pd.DataFrame:
@@ -106,9 +152,10 @@ def load_dataframe(
 
 # ─── Main orchestrator ────────────────────────────────────────────────────────
 def main() -> None:
+    load_local_env()
     sheet_id = env("SHEET_ID")
     worksheet = env("WORKSHEET")
-    sa_json = env("GOOGLE_SA_KEY_JSON")
+    sa_json = resolve_google_sa_json()
 
     pg_user = env("PG_USER")
     pg_password = env("PG_PASSWORD")
@@ -118,6 +165,9 @@ def main() -> None:
     pg_table = env("PG_TABLE")
     pg_if_exists = "replace"
     pg_chunksize_str = "1000"
+    pg_sslmode = os.getenv("PG_SSLMODE", "").strip() or None
+    if pg_sslmode is None and "supabase.co" in pg_host:
+        pg_sslmode = "require"
 
     try:
         pg_chunksize = int(pg_chunksize_str) if pg_chunksize_str else None
@@ -128,7 +178,10 @@ def main() -> None:
     df = read_worksheet(sheet_id, worksheet, sa_json)
 
     # Load
-    engine = get_engine(build_pg_url(pg_user, pg_password, pg_host, pg_port, pg_db))
+    pg_url = build_pg_url(
+        pg_user, pg_password, pg_host, pg_port, pg_db, sslmode=pg_sslmode
+    )
+    engine = get_engine(pg_url)
     load_dataframe(df, engine, pg_table, if_exists=pg_if_exists, chunksize=pg_chunksize)
 
 if __name__ == "__main__":

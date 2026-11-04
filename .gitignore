@@ -1,0 +1,4 @@
+.env
+gcp-service-account.json
+*.json
+!requirements.txt
