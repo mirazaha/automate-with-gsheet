@@ -85,7 +85,7 @@ def build_pg_url(
     sslmode: Optional[str] = None,
 ) -> str:
     url = (
-        f"postgresql://{quote_plus(user)}:{quote_plus(password)}"
+        f"postgresql+psycopg2://{quote_plus(user)}:{quote_plus(password)}"
         f"@{host}:{port}/{quote_plus(db, safe='')}"
     )
     if sslmode:
